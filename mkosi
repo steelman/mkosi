@@ -49,6 +49,7 @@ class OutputFormat(Enum):
     directory = 4
     subvolume = 5
     tar = 6
+    rpi = 7
 
 class Distribution(Enum):
     fedora = 1
@@ -57,6 +58,7 @@ class Distribution(Enum):
     arch = 4
     opensuse = 5
     mageia = 6
+    tizen = 7
 
 GPT_ROOT_X86           = uuid.UUID("44479540f29741b29af7d131d5f0458a")
 GPT_ROOT_X86_64        = uuid.UUID("4f68bce3e8cd4db196e7fbcaf984b709")
@@ -72,6 +74,7 @@ GPT_ROOT_X86_64_VERITY = uuid.UUID("2c7357edebd246d9aec123d437ec2bf5")
 GPT_ROOT_ARM_VERITY    = uuid.UUID("7386cdf2203c47a9a498f2ecce45a2d6")
 GPT_ROOT_ARM_64_VERITY = uuid.UUID("df3300ced69f4c92978c9bfb0f38d820")
 GPT_ROOT_IA64_VERITY   = uuid.UUID("86ed10d5b60745bb8957d350f23d0571")
+GPT_MS_BDP             = uuid.UUID("ebd0a0a2b9e5443387c068b6b72699c7")
 
 if platform.machine() == "x86_64":
     GPT_ROOT_NATIVE = GPT_ROOT_X86_64
@@ -170,6 +173,8 @@ def image_size(args):
         size += args.swap_size
     if args.verity_size is not None:
         size += args.verity_size
+    if args.output_format == OutputFormat.rpi:
+        size += args.rpi_boot_size
 
     return size
 
@@ -183,6 +188,12 @@ def determine_partition_table(args):
     pn = 1
     table = "label: gpt\n"
     run_sfdisk = False
+
+    if args.output_format == OutputFormat.rpi:
+        table += 'size={}, type={}, name="RPi Boot Partition"\n'.format(args.rpi_boot_size // 512, GPT_MS_BDP)
+        args.rpi_boot_partno = pn
+        pn += 1
+        run_sfdisk = True
 
     if args.bootable:
         table += 'size={}, type={}, name="ESP System Partition"\n'.format(args.esp_size // 512, GPT_ESP)
@@ -1892,6 +1903,7 @@ def parse_args():
 
     group = parser.add_argument_group("Partitions")
     group.add_argument("--root-size", help='Set size of root partition (only raw_gpt, raw_btrfs)', metavar='BYTES')
+    group.add_argument("--rpi-boot-size", help='Set size of Raspberry Pi boot partition (only rpi)', metavar='BYTES')
     group.add_argument("--esp-size", help='Set size of EFI system partition (only raw_gpt, raw_btrfs, raw_squashfs)', metavar='BYTES')
     group.add_argument("--swap-size", help='Set size of swap partition (only raw_gpt, raw_btrfs, raw_squashfs)', metavar='BYTES')
     group.add_argument("--home-size", help='Set size of /home partition (only raw_gpt, raw_squashfs)', metavar='BYTES')
@@ -2159,6 +2171,9 @@ def process_setting(args, section, key, value):
         if key == "RootSize":
             if args.root_size is None:
                 args.root_size = value
+        elif key == "RPiBootSize":
+            if args.rpi_boot_size is None:
+                args.rpi_boot_size = value
         elif key == "ESPSize":
             if args.esp_size is None:
                 args.esp_size = value
@@ -2500,11 +2515,16 @@ def load_args():
     args.home_size = parse_bytes(args.home_size)
     args.srv_size = parse_bytes(args.srv_size)
     args.esp_size = parse_bytes(args.esp_size)
+    args.rpi_boot_size = parse_bytes(args.rpi_boot_size)
     args.swap_size = parse_bytes(args.swap_size)
 
     if args.output_format in (OutputFormat.raw_gpt, OutputFormat.raw_btrfs) and args.root_size is None:
         args.root_size = 1024*1024*1024
 
+    if args.output_format == OutputFormat.rpi and args.rpi_boot_size is None:
+        print("bootable: %r" % args.bootable)
+        args.rpi_boot_size = 64*1024*1024
+        
     if args.bootable and args.esp_size is None:
         args.esp_size = 256*1024*1024
 
@@ -2626,11 +2646,12 @@ def print_summary(args):
     sys.stderr.write("  Scripts with network: " + yes_no(args.with_network) + "\n")
     sys.stderr.write("       nspawn Settings: " + none_to_none(args.nspawn_settings) + "\n")
 
-    if args.output_format in (OutputFormat.raw_gpt, OutputFormat.raw_btrfs, OutputFormat.raw_squashfs):
+    if args.output_format in (OutputFormat.raw_gpt, OutputFormat.raw_btrfs, OutputFormat.raw_squashfs, OutputFormat.rpi):
         sys.stderr.write("\nPARTITIONS:\n")
         sys.stderr.write("        Root Partition: " + format_bytes_or_auto(args.root_size) + "\n")
         sys.stderr.write("        Swap Partition: " + format_bytes_or_disabled(args.swap_size) + "\n")
         sys.stderr.write("                   ESP: " + format_bytes_or_disabled(args.esp_size) + "\n")
+        sys.stderr.write("              RPi Boot: " + format_bytes_or_disabled(args.rpi_boot_size) + "\n")
         sys.stderr.write("       /home Partition: " + format_bytes_or_disabled(args.home_size) + "\n")
         sys.stderr.write("        /srv Partition: " + format_bytes_or_disabled(args.srv_size) + "\n")
 
@@ -2885,7 +2906,7 @@ def main():
     args = load_args()
 
     if args.verb in ("build", "clean"):
-        check_root()
+        #check_root()
         unlink_output(args)
 
     if args.verb == "build":
@@ -2895,7 +2916,7 @@ def main():
         print_summary(args)
 
     if args.verb == "build":
-        check_root()
+        #check_root()
         init_namespace(args)
         build_stuff(args)
         print_output_size(args)
